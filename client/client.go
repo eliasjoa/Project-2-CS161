@@ -200,7 +200,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	iv := userlib.RandomBytes(16)
 	user_bytes_encrypted := userlib.SymEnc(master_key, iv, user_bytes)
 
-	//Then MAC it
+	//Then MAC it (64 bytes)
 	HMAC, err := userlib.HMACEval(HMAC_key, user_bytes_encrypted)
 	if err != nil {
 		return nil, errors.New("Could not append the HMAC to userdata")
@@ -216,6 +216,73 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 func GetUser(username string, password string) (userdataptr *User, err error) {
 	var userdata User
 	userdataptr = &userdata
+
+	//Update userdata value with given username and password
+	userdata.Username = username
+	password_salt := username + "p"
+	userdata.password = userlib.Hash([]byte(password + password_salt))
+
+	//Check whether user exists using the Keystore
+	user_public_key_keystore := "Public key for:" + username
+	_, ok := userlib.KeystoreGet(user_public_key_keystore)
+	if ok == false {
+		return nil, errors.New("The user does not exists")
+	}
+
+	//Finds the UUID
+	b := userlib.Hash([]byte(username))[:16]
+	user_UUID, err := uuid.FromBytes(b)
+	if err != nil {
+		return nil, errors.New("Could find the user in the datastore")
+	}
+
+	//Retrieve data
+	userdata_bytes_encrypted_mac, ok := userlib.DatastoreGet(user_UUID)
+	if !ok {
+		return nil, errors.New("No data found for that UUID")
+	}
+
+	//Splice HMAC and the encrypted json data
+	userdata_bytes_encrypted := userdata_bytes_encrypted_mac[:len(userdata_bytes_encrypted_mac)-64]
+	HMAC := userdata_bytes_encrypted[len(userdata_bytes_encrypted):]
+
+	//Compute the HMAC on the encrypted json data to check integrity
+	//Need to compute HMAC key
+
+	//Recompute master key with enough entropy using PBKDF
+	master_key_salt := username + "k"
+	master_key := userlib.Argon2Key([]byte(userdata.password), []byte(master_key_salt), key_length)
+	userdata.master_key = master_key
+
+	//Recompute HMAC key using master key into HBKDF where only 16 bytes are needed as that is
+	//the input size of the key in HMACEval
+	HMAC_key_64, err := userlib.HashKDF(userdata.master_key, []byte("HMAC key for user"))
+	if err != nil {
+		return nil, errors.New("Error in generation of mac key for user")
+	}
+
+	HMAC_key := HMAC_key_64[:16]
+
+	//Check if this HMAC_key computes the same HMAC as the one stored in datastore
+	new_HMAC, err := userlib.HMACEval(HMAC_key, userdata_bytes_encrypted)
+	if err != nil {
+		return nil, errors.New("Could not compute the HMAC using the new HMAC key")
+	}
+
+	equal := userlib.HMACEqual(HMAC, new_HMAC)
+	if equal {
+		return nil, errors.New("HMAC tag is wrong, integrity of userdata not verified")
+	}
+
+	//We can now decrypt the data as the HMAC is verified
+	userdata_bytes := userlib.SymDec(master_key, userdata_bytes_encrypted)
+
+	//Unmarshal the userdata
+	err = json.Unmarshal(userdata_bytes, userdataptr)
+	if err != nil {
+		return nil, err
+	}
+
 	return userdataptr, nil
 }
 
