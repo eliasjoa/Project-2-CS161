@@ -99,8 +99,15 @@ func someUsefulThings() {
 // This is the type definition for the User struct.
 // A Go struct is like a Python or Java class - it can have attributes
 // (e.g. like the Username attribute) and methods (e.g. like the StoreFile method below).
+const key_length = 16
+
 type User struct {
-	Username string
+	Username              string
+	password              []byte
+	secret_key            userlib.PKEDecKey
+	signature_private_key userlib.DSSignKey
+	master_key            []byte
+	hmac_key              []byte
 
 	// You can add other attributes here if you want! But note that in order for attributes to
 	// be included when this struct is serialized to/from JSON, they must be capitalized.
@@ -114,7 +121,95 @@ type User struct {
 
 func InitUser(username string, password string) (userdataptr *User, err error) {
 	var userdata User
+	if username == "" {
+		return nil, errors.New("Username cannot be nothing")
+	}
+
 	userdata.Username = username
+	password_salt := username + "p"
+	userdata.password = userlib.Hash([]byte(password + password_salt))
+
+	//Create public and private key
+	var pk userlib.PKEEncKey
+	var sk userlib.PKEDecKey
+	pk, sk, err = userlib.PKEKeyGen()
+	if err != nil {
+		return nil, errors.New("Error in creating RSA key pair")
+	}
+	userdata.secret_key = sk
+
+	//Create digital signature keys
+	var DS_sk userlib.DSSignKey
+	var DS_pk userlib.DSVerifyKey
+	DS_sk, DS_pk, err = userlib.DSKeyGen()
+	if err != nil {
+		return nil, errors.New("Error in creating RSA key pair for digital signature")
+	}
+	userdata.signature_private_key = DS_sk
+
+	//Create master key with enough entropy using PBKDF
+	master_key_salt := username + "k"
+	master_key := userlib.Argon2Key([]byte(userdata.password), []byte(master_key_salt), key_length)
+	userdata.master_key = master_key
+
+	//Create HMAC key using master key into HBKDF where only 16 bytes are needed as that is
+	//the input size of the key in HMACEval
+	HMAC_key_64, err := userlib.HashKDF(userdata.master_key, []byte("HMAC key for user"))
+	if err != nil {
+		return nil, errors.New("Error in generation of mac key for user")
+	}
+
+	HMAC_key := HMAC_key_64[:16]
+	userdata.hmac_key = HMAC_key
+
+	//Check if the user exists
+	user_public_key_keystore := "Public key for:" + username
+	_, ok := userlib.KeystoreGet(user_public_key_keystore)
+	if ok {
+		return nil, errors.New("The user already exists")
+	}
+
+	//Put public keys in keystore, both signature and for encryption of invitation
+	err = userlib.KeystoreSet(user_public_key_keystore, pk)
+	if err != nil {
+		return nil, errors.New("Could not put public key into keystore")
+	}
+
+	user_signature_key_keystore := "Signature key for:" + username
+	err = userlib.KeystoreSet(user_signature_key_keystore, DS_pk)
+	if err != nil {
+		return nil, errors.New("Could not put public key for signature into keystore")
+	}
+
+	//Now put the userdata into datastore where it is also encrypted
+	//Use a hash of the username as UUID
+	//The UUID needs a 16 byte slice so use the first 16 bytes of the hash for the UUID
+	b := userlib.Hash([]byte(username))[:16]
+	user_UUID, err := uuid.FromBytes(b)
+	if err != nil {
+		return nil, errors.New("Could not create a new value for an instance in the datastore for the user")
+	}
+
+	//Turn the data into JSON
+	user_bytes, err := json.Marshal(userdata)
+	if err != nil {
+		return nil, errors.New("Could not Marshal the userdata into bytes")
+	}
+
+	//Encrypt it
+	iv := userlib.RandomBytes(16)
+	user_bytes_encrypted := userlib.SymEnc(master_key, iv, user_bytes)
+
+	//Then MAC it
+	HMAC, err := userlib.HMACEval(HMAC_key, user_bytes_encrypted)
+	if err != nil {
+		return nil, errors.New("Could not append the HMAC to userdata")
+	}
+	user_bytes_encrypted_MAC := append(user_bytes_encrypted, HMAC...)
+
+	//Store it
+	userlib.DatastoreSet(user_UUID, user_bytes_encrypted_MAC)
+
 	return &userdata, nil
 }
 
