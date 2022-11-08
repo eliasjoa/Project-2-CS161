@@ -103,31 +103,65 @@ const key_length = 16
 
 type User struct {
 	Username              string
-	password              []byte
-	secret_key            userlib.PKEDecKey
-	signature_private_key userlib.DSSignKey
+	Password              []byte
+	Secret_key            userlib.PKEDecKey
+	Signature_private_key userlib.DSSignKey
 	master_key            []byte
 	hmac_key              []byte
-
-	// You can add other attributes here if you want! But note that in order for attributes to
-	// be included when this struct is serialized to/from JSON, they must be capitalized.
-	// On the flipside, if you have an attribute that you want to be able to access from
-	// this struct's methods, but you DON'T want that value to be included in the serialized value
-	// of this struct that's stored in datastore, then you can use a "private" variable (e.g. one that
-	// begins with a lowercase letter).
+	Files_owned           map[string]int
 }
+
+type File struct {
+	Contents  []byte
+	Next_uuid uuid.UUID
+}
+
+type FileReferenceOwner struct {
+	Uuid_shared_with      map[string]uuid.UUID
+	Enc_keys_shared_with  map[string][]byte
+	Hmac_keys_shared_with map[string][]byte
+	File_enc_key          []byte
+	Hmac_key              []byte
+	Uuid_file_reference   uuid.UUID
+}
+
+type FileReferencePrimary struct {
+	File_enc_key []byte
+	Hmac_key     []byte
+	File_pointer uuid.UUID
+}
+
+type FileReferenceSecondary struct {
+	File_Reference_Primary_enc_key        []byte
+	Hmac_key                              []byte
+	HMAC                                  []byte
+	Uuid_file_reference_primary_reference uuid.UUID
+}
+
+type Invitation struct {
+	FileReferencePrimary_decrypt_key []byte
+	FileReferencePrimary_hmac_key    []byte
+	FileReferencePrimary_reference   uuid.UUID
+}
+
+// You can add other attributes here if you want! But note that in order for attributes to
+// be included when this struct is serialized to/from JSON, they must be capitalized.
+// On the flipside, if you have an attribute that you want to be able to access from
+// this struct's methods, but you DON'T want that value to be included in the serialized value
+// of this struct that's stored in datastore, then you can use a "private" variable (e.g. one that
+// begins with a lowercase letter).
 
 // NOTE: The following methods have toy (insecure!) implementations.
 
-func InitUser(username string, password string) (userdataptr *User, err error) {
+func InitUser(Username string, password string) (userdataptr *User, err error) {
 	var userdata User
-	if username == "" {
+	if Username == "" {
 		return nil, errors.New("Username cannot be nothing")
 	}
 
-	userdata.Username = username
-	password_salt := username + "p"
-	userdata.password = userlib.Hash([]byte(password + password_salt))
+	userdata.Username = Username
+	password_salt := Username + "p"
+	userdata.Password = userlib.Hash([]byte(password + password_salt))
 
 	//Create public and private key
 	var pk userlib.PKEEncKey
@@ -136,7 +170,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	if err != nil {
 		return nil, errors.New("Error in creating RSA key pair")
 	}
-	userdata.secret_key = sk
+	userdata.Secret_key = sk
 
 	//Create digital signature keys
 	var DS_sk userlib.DSSignKey
@@ -145,11 +179,11 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	if err != nil {
 		return nil, errors.New("Error in creating RSA key pair for digital signature")
 	}
-	userdata.signature_private_key = DS_sk
+	userdata.Signature_private_key = DS_sk
 
 	//Create master key with enough entropy using PBKDF
-	master_key_salt := username + "k"
-	master_key := userlib.Argon2Key([]byte(userdata.password), []byte(master_key_salt), key_length)
+	master_key_salt := Username + "k"
+	master_key := userlib.Argon2Key([]byte(userdata.Password), []byte(master_key_salt), key_length)
 	userdata.master_key = master_key
 
 	//Create HMAC key using master key into HBKDF where only 16 bytes are needed as that is
@@ -163,7 +197,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	userdata.hmac_key = HMAC_key
 
 	//Check if the user exists
-	user_public_key_keystore := "Public key for:" + username
+	user_public_key_keystore := "Public key for:" + Username
 	_, ok := userlib.KeystoreGet(user_public_key_keystore)
 	if ok {
 		return nil, errors.New("The user already exists")
@@ -175,16 +209,16 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 		return nil, errors.New("Could not put public key into keystore")
 	}
 
-	user_signature_key_keystore := "Signature key for:" + username
+	user_signature_key_keystore := "Signature key for:" + Username
 	err = userlib.KeystoreSet(user_signature_key_keystore, DS_pk)
 	if err != nil {
 		return nil, errors.New("Could not put public key for signature into keystore")
 	}
 
 	//Now put the userdata into datastore where it is also encrypted
-	//Use a hash of the username as UUID
+	//Use a hash of the Username as UUID
 	//The UUID needs a 16 byte slice so use the first 16 bytes of the hash for the UUID
-	b := userlib.Hash([]byte(username))[:16]
+	b := userlib.Hash([]byte(Username))[:16]
 	user_UUID, err := uuid.FromBytes(b)
 	if err != nil {
 		return nil, errors.New("Could not create a new value for an instance in the datastore for the user")
@@ -213,24 +247,24 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	return &userdata, nil
 }
 
-func GetUser(username string, password string) (userdataptr *User, err error) {
+func GetUser(Username string, password string) (userdataptr *User, err error) {
 	var userdata User
 	userdataptr = &userdata
 
-	//Update userdata value with given username and password
-	userdata.Username = username
-	password_salt := username + "p"
-	userdata.password = userlib.Hash([]byte(password + password_salt))
+	//Update userdata value with given Username and password
+	userdata.Username = Username
+	password_salt := Username + "p"
+	userdata.Password = userlib.Hash([]byte(password + password_salt))
 
 	//Check whether user exists using the Keystore
-	user_public_key_keystore := "Public key for:" + username
+	user_public_key_keystore := "Public key for:" + Username
 	_, ok := userlib.KeystoreGet(user_public_key_keystore)
 	if ok == false {
 		return nil, errors.New("The user does not exists")
 	}
 
 	//Finds the UUID
-	b := userlib.Hash([]byte(username))[:16]
+	b := userlib.Hash([]byte(Username))[:16]
 	user_UUID, err := uuid.FromBytes(b)
 	if err != nil {
 		return nil, errors.New("Could find the user in the datastore")
@@ -250,8 +284,8 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 	//Need to compute HMAC key
 
 	//Recompute master key with enough entropy using PBKDF
-	master_key_salt := username + "k"
-	master_key := userlib.Argon2Key([]byte(userdata.password), []byte(master_key_salt), key_length)
+	master_key_salt := Username + "k"
+	master_key := userlib.Argon2Key([]byte(userdata.Password), []byte(master_key_salt), key_length)
 	userdata.master_key = master_key
 
 	//Recompute HMAC key using master key into HBKDF where only 16 bytes are needed as that is
@@ -287,6 +321,27 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 }
 
 func (userdata *User) StoreFile(filename string, content []byte) (err error) {
+	//First check if the file exists
+
+	//To do this we need to compute the UUID
+	//Password is already stores as a hash
+	var file_uuid_bytes []byte
+	file_uuid_bytes = append(file_uuid_bytes, userlib.Hash([]byte(userdata.Username))...)
+	file_uuid_bytes = append(file_uuid_bytes, userdata.Password...)
+	file_uuid_bytes = append(file_uuid_bytes, userlib.Hash([]byte(filename))...)
+	file_uuid, err := uuid.FromBytes(userlib.Hash(file_uuid_bytes)[:16])
+	if err != nil {
+		return err
+	}
+	//Check if file exists
+	datastore_file_content, ok := userlib.DatastoreGet(file_uuid)
+
+	//If the file does not exist
+	if !ok {
+		//Create a new FileReferenceOwner
+
+	}
+
 	storageKey, err := uuid.FromBytes(userlib.Hash([]byte(filename + userdata.Username))[:16])
 	if err != nil {
 		return err
