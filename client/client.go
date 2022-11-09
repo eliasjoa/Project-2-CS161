@@ -448,6 +448,26 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 		//Send the file to the datastore at the uuid of file_controller.start
 		userlib.DatastoreSet(file_controller.Start, file_bytes_encrypted_HMAC)
 
+		//Finally, add an empty file to the end of the linked list (file_controller.End)
+		var empty_file File
+
+		//Marshall it
+		empty_file_bytes, err := json.Marshal(empty_file)
+		if err != nil {
+			return err
+		}
+		//Encrypt it
+		iv = userlib.RandomBytes(16)
+		empty_file_bytes_encrypted := userlib.SymEnc(file_reference_owner.File_enc_key, iv, empty_file_bytes)
+		//HMAC it
+		empty_file_bytes_HMAC, err := userlib.HMACEval(file_reference_owner.Hmac_key, empty_file_bytes_encrypted)
+		if err != nil {
+			return err
+		}
+		empty_file_bytes_encrypted_HMAC := append(empty_file_bytes_encrypted, empty_file_bytes_HMAC...)
+		//Store it in datastore at file_controller.End uuid
+		userlib.DatastoreSet(file_controller.End, empty_file_bytes_encrypted_HMAC)
+
 		return nil
 	}
 
