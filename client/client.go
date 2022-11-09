@@ -112,8 +112,13 @@ type User struct {
 }
 
 type File struct {
-	Contents  []byte
+	Content   []byte
 	Next_uuid uuid.UUID
+}
+
+type FileController struct {
+	Start uuid.UUID
+	End   uuid.UUID
 }
 
 type FileReferenceOwner struct {
@@ -338,8 +343,112 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 
 	//If the file does not exist
 	if !ok {
-		//Create a new FileReferenceOwner
+		//Update the userdata with the new file owned
+		userdata.Files_owned[filename] = 1
+		//Upload the new userdata to the datastore using helper function
+		err := UploadUserdata(userdata)
+		if err != nil {
+			return err
+		}
 
+		//Create all the new structs needed for creating a file and the keys
+		//needed to encrypt file and filecontroller
+		var file_reference_owner FileReferenceOwner
+
+		//Keys for file encryption and HMAC
+		file_reference_owner.File_enc_key = userlib.RandomBytes(16)
+		file_reference_owner.Hmac_key = userlib.RandomBytes(16)
+		//The new file's UUID
+		file_reference_owner.Uuid_file_reference = uuid.New()
+
+		//The sharing functionality
+		//Create a map for sharing of the UUID, HMAC_keys and Encryption keys to people with access
+		file_reference_owner.Uuid_shared_with = make(map[string]uuid.UUID)
+		file_reference_owner.Hmac_keys_shared_with = make(map[string][]byte)
+		file_reference_owner.Enc_keys_shared_with = make(map[string][]byte)
+
+		//Create the encryption key for filereferenceowner
+		encryption_key_64, err := userlib.HashKDF(userdata.master_key, []byte("Encryption key for file"+filename))
+		if err != nil {
+			return err
+		}
+		encryption_key := encryption_key_64[:16]
+		//Create the HMAC key for filereferenceowner
+		hmac_key_64, err := userlib.HashKDF(userdata.master_key, []byte("HMAC key for file"+filename))
+		if err != nil {
+			return err
+		}
+		hmac_key := hmac_key_64[:16]
+
+		//Turn filereferenceowner to bytes and encrypt and then mac
+		file_reference_owner_bytes, err := json.Marshal(file_reference_owner)
+		if err != nil {
+			return err
+		}
+
+		//Encrypt
+		iv := userlib.RandomBytes(16)
+		file_reference_owner_bytes_encrypted := userlib.SymEnc(encryption_key, iv, file_reference_owner_bytes)
+
+		//MAC
+		filereferenceowner_HMAC, err := userlib.HMACEval(hmac_key, file_reference_owner_bytes_encrypted)
+		if err != nil {
+			return err
+		}
+		file_reference_owner_bytes_encrypted_HMAC := append(file_reference_owner_bytes_encrypted, filereferenceowner_HMAC...)
+
+		//Store filereferenceowner in datastore with Frombytes(username + password + filename) as uuid
+		userlib.DatastoreSet(file_uuid, file_reference_owner_bytes_encrypted_HMAC)
+
+		//Now we can create the file and the file controller
+		var file File
+		var file_controller FileController
+
+		file_controller.Start = uuid.New()
+		file_controller.End = uuid.New()
+
+		file.Content = content
+		file.Next_uuid = file_controller.End
+
+		//Now the we have a file controller keeping track of where the file linked lists starts and ends
+		//We then store the filecontroller at the uuid referenced by the filereferenceowner
+
+		//Marshal file controller
+		file_controller_bytes, err := json.Marshal(file_controller)
+		if err != nil {
+			return err
+		}
+		//Encrypt file controller
+		iv = userlib.RandomBytes(16)
+		file_controller_bytes_encrypted := userlib.SymEnc(file_reference_owner.File_enc_key, iv, file_controller_bytes)
+		//HMAC it
+		file_controller_bytes_HMAC, err := userlib.HMACEval(file_reference_owner.Hmac_key, file_controller_bytes_encrypted)
+		if err != nil {
+			return err
+		}
+		file_controller_bytes_encrypted_HMAC := append(file_controller_bytes_encrypted, file_controller_bytes_HMAC...)
+		//Store in datastore
+		userlib.DatastoreSet(file_reference_owner.Uuid_file_reference, file_controller_bytes_encrypted_HMAC)
+
+		//Now we store the file at the UUID referenced by file_controller.Start
+		//Marshall it
+		file_bytes, err := json.Marshal(file)
+		if err != nil {
+			return err
+		}
+		//Encrypt it using filereferenceowner key
+		iv = userlib.RandomBytes(16)
+		file_bytes_encrypted := userlib.SymEnc(file_reference_owner.File_enc_key, iv, file_bytes)
+		//HMAC it
+		file_bytes_HMAC, err := userlib.HMACEval(file_reference_owner.Hmac_key, file_bytes_encrypted)
+		if err != nil {
+			return err
+		}
+		file_bytes_encrypted_HMAC := append(file_bytes_encrypted, file_bytes_HMAC...)
+		//Send the file to the datastore at the uuid of file_controller.start
+		userlib.DatastoreSet(file_controller.Start, file_bytes_encrypted_HMAC)
+
+		return nil
 	}
 
 	storageKey, err := uuid.FromBytes(userlib.Hash([]byte(filename + userdata.Username))[:16])
@@ -381,5 +490,38 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 }
 
 func (userdata *User) RevokeAccess(filename string, recipientUsername string) error {
+	return nil
+}
+
+func UploadUserdata(userdata *User) (err error) {
+	//Now put the userdata into datastore where it is also encrypted
+	//Use a hash of the Username as UUID
+	//The UUID needs a 16 byte slice so use the first 16 bytes of the hash for the UUID
+	b := userlib.Hash([]byte(userdata.Username))[:16]
+	user_UUID, err := uuid.FromBytes(b)
+	if err != nil {
+		return nil
+	}
+
+	//Turn the data into JSON
+	user_bytes, err := json.Marshal(userdata)
+	if err != nil {
+		return nil
+	}
+
+	//Encrypt it
+	iv := userlib.RandomBytes(16)
+	user_bytes_encrypted := userlib.SymEnc(userdata.master_key, iv, user_bytes)
+
+	//Then MAC it (64 bytes)
+	HMAC, err := userlib.HMACEval(userdata.hmac_key, user_bytes_encrypted)
+	if err != nil {
+		return nil
+	}
+	user_bytes_encrypted_MAC := append(user_bytes_encrypted, HMAC...)
+
+	//Store it
+	userlib.DatastoreSet(user_UUID, user_bytes_encrypted_MAC)
+
 	return nil
 }
