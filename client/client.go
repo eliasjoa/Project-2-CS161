@@ -101,6 +101,8 @@ func someUsefulThings() {
 // (e.g. like the Username attribute) and methods (e.g. like the StoreFile method below).
 const key_length = 16
 
+var counter int
+
 type User struct {
 	Username              string
 	Password              []byte //Stored as hash
@@ -139,7 +141,6 @@ type FileReferencePrimary struct {
 type FileReferenceSecondary struct {
 	File_Reference_Primary_enc_key []byte
 	Hmac_key                       []byte
-	HMAC                           []byte
 	File_reference_primary_pointer uuid.UUID
 }
 
@@ -332,8 +333,7 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 	//Use helper function for this
 	userdata, err = getUserdata(userdata)
 	if err != nil {
-		fmt.Print("0")
-		return err
+		return errors.New("336")
 	}
 	//First check if the file exists
 
@@ -683,7 +683,161 @@ func (userdata *User) AppendToFile(filename string, content []byte) error {
 	//Update the user to get the master key and hmac key
 	userdata, err := getUserdata(userdata)
 	if err != nil {
+		return errors.New("687")
+	}
+	//Get the uuid of the file
+	var file_uuid_bytes []byte
+	file_uuid_bytes = append(file_uuid_bytes, userlib.Hash([]byte(userdata.Username))...)
+	file_uuid_bytes = append(file_uuid_bytes, userdata.Password...)
+	file_uuid_bytes = append(file_uuid_bytes, userlib.Hash([]byte(filename))...)
+	file_uuid, err := uuid.FromBytes(userlib.Hash(file_uuid_bytes)[:16])
+	if err != nil {
 		return err
+	}
+
+	//Create the hmac and encryption key using masterkey
+	//Check if file exists
+	datastore_file_content, ok := userlib.DatastoreGet(file_uuid)
+	if !ok {
+		return errors.New("the file does not exist in the namespace of the user")
+	}
+
+	//Create the encryption key
+	encryption_key_64, err := userlib.HashKDF(userdata.master_key, []byte("Encryption key for file"+filename))
+	if err != nil {
+		return err
+	}
+	encryption_key := encryption_key_64[:16]
+	//Create the HMAC key
+	hmac_key_64, err := userlib.HashKDF(userdata.master_key, []byte("HMAC key for file"+filename))
+	if err != nil {
+		return err
+	}
+	hmac_key := hmac_key_64[:16]
+
+	//Append if owner
+	owned := userdata.Files_owned[filename]
+	if owned {
+		//Since it is owned the user can get the file controller from an filereferenceowner struct
+		var file_reference_owner FileReferenceOwner
+		//Check HMAC
+		if !ValidHMAC(hmac_key, datastore_file_content) {
+			return errors.New("the integrity of the filereferenceowner has been compromised")
+		}
+		//Decrypt
+		datastore_file_content_encrypted := datastore_file_content[:len(datastore_file_content)-64]
+		datastore_file_content_decrypted := userlib.SymDec(encryption_key, datastore_file_content_encrypted)
+		//Unmarshal
+		err := json.Unmarshal(datastore_file_content_decrypted, &file_reference_owner)
+		if err != nil {
+			return err
+		}
+		//We can now access the filecontroller
+		var file_controller FileController
+		file_controller_bytes_encrypted_HMAC, ok := userlib.DatastoreGet(file_reference_owner.File_controller_pointer)
+		if !ok {
+			return errors.New("could not find the file controller")
+		}
+		//Check hmac and decrypt
+		//Check HMAC
+		if !ValidHMAC(file_reference_owner.Hmac_key, file_controller_bytes_encrypted_HMAC) {
+			return errors.New("the integrity of the filereferenceowner has been compromised")
+		}
+		//Decrypt
+		file_controller_bytes_encrypted := file_controller_bytes_encrypted_HMAC[:len(file_controller_bytes_encrypted_HMAC)-64]
+		file_controller_bytes_decrypted := userlib.SymDec(file_reference_owner.File_enc_key, file_controller_bytes_encrypted)
+		//Unmarshal
+		err = json.Unmarshal(file_controller_bytes_decrypted, &file_controller)
+		if err != nil {
+			return err
+		}
+
+		//Now we have access to the file uuid and can append the contents
+		var append_file File
+		var end_file File
+		append_file.Content = content
+		append_file.Next_uuid = uuid.New()
+
+		//Finally realized that i need helper functions to download and post to datastore
+		//Post start file to datastore at the next uuid
+		err = SendToDatastore(file_controller.End, file_reference_owner.File_enc_key, file_reference_owner.Hmac_key, append_file)
+		if err != nil {
+			return errors.New("could not append")
+		}
+
+		//Update the file controller with the new tail
+		file_controller.End = append_file.Next_uuid
+		err = SendToDatastore(file_reference_owner.File_controller_pointer, file_reference_owner.File_enc_key, file_reference_owner.Hmac_key, file_controller)
+		if err != nil {
+			return errors.New("could not store new filecontroller")
+		}
+		//Store empty file for next file when next append is done
+		err = SendToDatastore(append_file.Next_uuid, file_reference_owner.File_enc_key, file_reference_owner.Hmac_key, end_file)
+		if err != nil {
+			return errors.New("could not store end file to datastore")
+		}
+		return nil
+	}
+	//If the file is not owned by the user
+	//Access the filereferencesecondary first
+	//Initialize structs
+	var file_reference_secondary FileReferenceSecondary
+	var file_reference_primary FileReferencePrimary
+	var file_controller FileController
+
+	//Load file reference secondary
+	file_reference_secondary_bytes, err := RetrieveFromDatastore(file_uuid, encryption_key, hmac_key)
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(file_reference_secondary_bytes, &file_reference_secondary)
+	if err != nil {
+		return err
+	}
+
+	//Now we can load the file reference primary
+	file_reference_primary_bytes, err := RetrieveFromDatastore(file_reference_secondary.File_reference_primary_pointer, file_reference_secondary.File_Reference_Primary_enc_key, file_reference_secondary.Hmac_key)
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(file_reference_primary_bytes, &file_reference_primary)
+	if err != nil {
+		return err
+	}
+
+	//Now load the file controller
+	file_controller_bytes, err := RetrieveFromDatastore(file_reference_primary.File_controller_pointer, file_reference_primary.File_enc_key, file_reference_primary.Hmac_key)
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(file_controller_bytes, &file_controller)
+	if err != nil {
+		return err
+	}
+
+	//Now we can do the same procedure as if you were the owner
+	//Now we have access to the file uuid and can append the contents
+	var append_file File
+	var end_file File
+	append_file.Content = content
+	append_file.Next_uuid = uuid.New()
+
+	//Post start file to datastore at the next uuid
+	err = SendToDatastore(file_controller.End, file_reference_primary.File_enc_key, file_reference_primary.Hmac_key, append_file)
+	if err != nil {
+		return errors.New("could not append")
+	}
+
+	//Update the file controller with the new tail
+	file_controller.End = append_file.Next_uuid
+	err = SendToDatastore(file_reference_primary.File_controller_pointer, file_reference_primary.File_enc_key, file_reference_primary.Hmac_key, file_controller)
+	if err != nil {
+		return errors.New("could not store new filecontroller")
+	}
+	//Store empty file for next file when next append is done
+	err = SendToDatastore(append_file.Next_uuid, file_reference_primary.File_enc_key, file_reference_primary.Hmac_key, end_file)
+	if err != nil {
+		return errors.New("could not store end file to datastore")
 	}
 
 	return nil
@@ -757,14 +911,14 @@ func getUserdata(userdata *User) (updated_userdata *User, err error) {
 	userdata.master_key = master_key
 
 	//Create the hmac key
-	Hmac_key_64, err := userlib.HashKDF(master_key, []byte("Hmac key for user"))
+	Hmac_key_64, err := userlib.HashKDF(master_key, []byte("HMAC key for user"))
 	if err != nil {
 		return nil, err
 	}
 	hmac_key := Hmac_key_64[:16]
 
 	//Find the user in the datastore
-	uuid, err := uuid.FromBytes(userlib.Hash([]byte(userdata.Username)[:16]))
+	uuid, err := uuid.FromBytes(userlib.Hash([]byte(userdata.Username))[:16])
 	if err != nil {
 		return nil, err
 	}
@@ -774,7 +928,7 @@ func getUserdata(userdata *User) (updated_userdata *User, err error) {
 	}
 	//Check the hmac
 	if !ValidHMAC(hmac_key, stored_user_w_hmac) {
-		return nil, errors.New("The integrity of the user has been compromised")
+		return nil, errors.New("the integrity of the user has been compromised")
 	}
 	//If hmac is correct we can update the userdata and send this back
 	stored_user_bytes_encrypted := stored_user_w_hmac[:len(stored_user_w_hmac)-64]
@@ -801,4 +955,42 @@ func ValidHMAC(hmac_key []byte, content_with_HMAC []byte) (valid bool) {
 	}
 	valid = userlib.HMACEqual(hmac, hmac_content)
 	return valid
+}
+
+// Function to send an object to datastore
+func SendToDatastore(uuid uuid.UUID, encryption_key []byte, hmac_key []byte, object interface{}) (err error) {
+	//marshall it
+	object_bytes, err := json.Marshal(object)
+	if err != nil {
+		return err
+	}
+	//Encrypt it
+	iv := userlib.RandomBytes(16)
+	object_bytes_encrypted := userlib.SymEnc(encryption_key, iv, object_bytes)
+	//HMAC it
+	hmac, err := userlib.HMACEval(hmac_key, object_bytes_encrypted)
+	if err != nil {
+		return err
+	}
+	object_bytes_encrypted_HMAC := append(object_bytes_encrypted, hmac...)
+	//Send to datastore
+	userlib.DatastoreSet(uuid, object_bytes_encrypted_HMAC)
+	return nil
+}
+
+// Function to retrieve an object from datastore
+func RetrieveFromDatastore(uuid uuid.UUID, encryption_key []byte, hmac_key []byte) (object_bytes []byte, err error) {
+	object_bytes_encrypted_HMAC, ok := userlib.DatastoreGet(uuid)
+	if !ok {
+		return nil, errors.New("could not find the object in the datastore")
+	}
+	//Check hmac
+	if !ValidHMAC(hmac_key, object_bytes_encrypted_HMAC) {
+		return nil, errors.New("integrity of object has been compromised")
+	}
+	object_bytes_encrypted := object_bytes_encrypted_HMAC[:len(object_bytes_encrypted_HMAC)-64]
+	//decrypt
+	object_bytes_decrypted := userlib.SymDec(encryption_key, object_bytes_encrypted)
+
+	return object_bytes_decrypted, nil
 }
