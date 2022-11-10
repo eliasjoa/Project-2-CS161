@@ -103,7 +103,7 @@ const key_length = 16
 
 type User struct {
 	Username              string
-	Password              []byte
+	Password              []byte //Stored as hash
 	Secret_key            userlib.PKEDecKey
 	Signature_private_key userlib.DSSignKey
 	master_key            []byte
@@ -161,7 +161,7 @@ type Invitation struct {
 func InitUser(Username string, password string) (userdataptr *User, err error) {
 	var userdata User
 	if Username == "" {
-		return nil, errors.New("Username cannot be nothing")
+		return nil, errors.New("username cannot be nothing")
 	}
 
 	userdata.Username = Username
@@ -173,7 +173,7 @@ func InitUser(Username string, password string) (userdataptr *User, err error) {
 	var sk userlib.PKEDecKey
 	pk, sk, err = userlib.PKEKeyGen()
 	if err != nil {
-		return nil, errors.New("Error in creating RSA key pair")
+		return nil, errors.New("error in creating RSA key pair")
 	}
 	userdata.Secret_key = sk
 
@@ -182,7 +182,7 @@ func InitUser(Username string, password string) (userdataptr *User, err error) {
 	var DS_pk userlib.DSVerifyKey
 	DS_sk, DS_pk, err = userlib.DSKeyGen()
 	if err != nil {
-		return nil, errors.New("Error in creating RSA key pair for digital signature")
+		return nil, errors.New("error in creating RSA key pair for digital signature")
 	}
 	userdata.Signature_private_key = DS_sk
 
@@ -195,7 +195,7 @@ func InitUser(Username string, password string) (userdataptr *User, err error) {
 	//the input size of the key in HMACEval
 	HMAC_key_64, err := userlib.HashKDF(userdata.master_key, []byte("HMAC key for user"))
 	if err != nil {
-		return nil, errors.New("Error in generation of mac key for user")
+		return nil, errors.New("error in generation of mac key for user")
 	}
 
 	HMAC_key := HMAC_key_64[:16]
@@ -205,19 +205,19 @@ func InitUser(Username string, password string) (userdataptr *User, err error) {
 	user_public_key_keystore := "Public key for:" + Username
 	_, ok := userlib.KeystoreGet(user_public_key_keystore)
 	if ok {
-		return nil, errors.New("The user already exists")
+		return nil, errors.New("the user already exists")
 	}
 
 	//Put public keys in keystore, both signature and for encryption of invitation
 	err = userlib.KeystoreSet(user_public_key_keystore, pk)
 	if err != nil {
-		return nil, errors.New("Could not put public key into keystore")
+		return nil, errors.New("could not put public key into keystore")
 	}
 
 	user_signature_key_keystore := "Signature key for:" + Username
 	err = userlib.KeystoreSet(user_signature_key_keystore, DS_pk)
 	if err != nil {
-		return nil, errors.New("Could not put public key for signature into keystore")
+		return nil, errors.New("could not put public key for signature into keystore")
 	}
 
 	//Now put the userdata into datastore where it is also encrypted
@@ -226,13 +226,14 @@ func InitUser(Username string, password string) (userdataptr *User, err error) {
 	b := userlib.Hash([]byte(Username))[:16]
 	user_UUID, err := uuid.FromBytes(b)
 	if err != nil {
-		return nil, errors.New("Could not create a new value for an instance in the datastore for the user")
+		return nil, errors.New("could not create a new value for an instance in the datastore for the user")
 	}
-
+	//Make a file owned and add to userdata
+	userdata.Files_owned = make(map[string]bool)
 	//Turn the data into JSON
 	user_bytes, err := json.Marshal(userdata)
 	if err != nil {
-		return nil, errors.New("Could not Marshal the userdata into bytes")
+		return nil, errors.New("could not Marshal the userdata into bytes")
 	}
 
 	//Encrypt it
@@ -242,7 +243,7 @@ func InitUser(Username string, password string) (userdataptr *User, err error) {
 	//Then MAC it (64 bytes)
 	HMAC, err := userlib.HMACEval(HMAC_key, user_bytes_encrypted)
 	if err != nil {
-		return nil, errors.New("Could not append the HMAC to userdata")
+		return nil, errors.New("could not append the HMAC to userdata")
 	}
 	user_bytes_encrypted_MAC := append(user_bytes_encrypted, HMAC...)
 
@@ -264,21 +265,21 @@ func GetUser(Username string, password string) (userdataptr *User, err error) {
 	//Check whether user exists using the Keystore
 	user_public_key_keystore := "Public key for:" + Username
 	_, ok := userlib.KeystoreGet(user_public_key_keystore)
-	if ok == false {
-		return nil, errors.New("The user does not exists")
+	if !ok {
+		return nil, errors.New("the user does not exists")
 	}
 
 	//Finds the UUID
 	b := userlib.Hash([]byte(Username))[:16]
 	user_UUID, err := uuid.FromBytes(b)
 	if err != nil {
-		return nil, errors.New("Could find the user in the datastore")
+		return nil, errors.New("could find the user in the datastore")
 	}
 
 	//Retrieve data
 	userdata_bytes_encrypted_mac, ok := userlib.DatastoreGet(user_UUID)
 	if !ok {
-		return nil, errors.New("No data found for that UUID")
+		return nil, errors.New("no data found for that UUID")
 	}
 
 	//Splice HMAC and the encrypted json data
@@ -297,7 +298,7 @@ func GetUser(Username string, password string) (userdataptr *User, err error) {
 	//the input size of the key in HMACEval
 	HMAC_key_64, err := userlib.HashKDF(userdata.master_key, []byte("HMAC key for user"))
 	if err != nil {
-		return nil, errors.New("Error in generation of mac key for user")
+		return nil, errors.New("error in generation of mac key for user")
 	}
 
 	HMAC_key := HMAC_key_64[:16]
@@ -305,12 +306,12 @@ func GetUser(Username string, password string) (userdataptr *User, err error) {
 	//Check if this HMAC_key computes the same HMAC as the one stored in datastore
 	new_HMAC, err := userlib.HMACEval(HMAC_key, userdata_bytes_encrypted)
 	if err != nil {
-		return nil, errors.New("Could not compute the HMAC using the new HMAC key")
+		return nil, errors.New("could not compute the HMAC using the new HMAC key")
 	}
 
 	equal := userlib.HMACEqual(HMAC, new_HMAC)
 	if equal {
-		return nil, errors.New("HMAC tag is wrong, integrity of userdata not verified")
+		return nil, errors.New("hmac tag is wrong, integrity of userdata not verified")
 	}
 
 	//We can now decrypt the data as the HMAC is verified
@@ -326,6 +327,14 @@ func GetUser(Username string, password string) (userdataptr *User, err error) {
 }
 
 func (userdata *User) StoreFile(filename string, content []byte) (err error) {
+
+	//We first need to update the userdata with the proper hmac key and master key as this is stored
+	//Use helper function for this
+	userdata, err = getUserdata(userdata)
+	if err != nil {
+		fmt.Print("0")
+		return err
+	}
 	//First check if the file exists
 
 	//To do this we need to compute the UUID
@@ -336,6 +345,7 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 	file_uuid_bytes = append(file_uuid_bytes, userlib.Hash([]byte(filename))...)
 	file_uuid, err := uuid.FromBytes(userlib.Hash(file_uuid_bytes)[:16])
 	if err != nil {
+		fmt.Print("1")
 		return err
 	}
 	//Check if file exists
@@ -344,12 +354,14 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 	//Create the encryption key
 	encryption_key_64, err := userlib.HashKDF(userdata.master_key, []byte("Encryption key for file"+filename))
 	if err != nil {
+		fmt.Print("2")
 		return err
 	}
 	encryption_key := encryption_key_64[:16]
 	//Create the HMAC key
 	hmac_key_64, err := userlib.HashKDF(userdata.master_key, []byte("HMAC key for file"+filename))
 	if err != nil {
+		fmt.Print("3")
 		return err
 	}
 	hmac_key := hmac_key_64[:16]
@@ -480,7 +492,7 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 		//We want to now access the filereference owner to see where our filecontroller is
 		//Need to first check integrity of filereferenceowner using valid mac helper function
 		if !ValidHMAC(hmac_key, datastore_file_content) {
-			return errors.New("The integrity of the FileReferenceOwner of this file has been compromised")
+			return errors.New("the integrity of the FileReferenceOwner of this file has been compromised")
 		}
 		//As it is integral we can load the filereference owner from datastore_file_content
 		datastore_file_content_encrypted := datastore_file_content[:len(datastore_file_content)-64]
@@ -494,11 +506,11 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 		//Load the file controller
 		file_controller_bytes_with_HMAC, ok := userlib.DatastoreGet(file_reference_owner.File_controller_pointer)
 		if !ok {
-			return errors.New("Something wrong with accessing file controller")
+			return errors.New("something wrong with accessing file controller")
 		}
 		//Check HMAC of file controller
 		if !ValidHMAC(file_reference_owner.Hmac_key, file_controller_bytes_with_HMAC) {
-			return errors.New("The integrity of the file controller is compromised")
+			return errors.New("the integrity of the file controller is compromised")
 		}
 		//Decrypt it
 		file_controller_bytes_encrypted := file_controller_bytes_with_HMAC[:len(file_controller_bytes_with_HMAC)-64]
@@ -570,7 +582,7 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 	//This is already loaded
 	//Check HMAC
 	if !ValidHMAC(hmac_key, datastore_file_content) {
-		return errors.New("Integrity of the filereferencesecondary is compromised")
+		return errors.New("integrity of the filereferencesecondary is compromised")
 	}
 	//If HMAC is valid decrypt and then demarshal
 	//Decrypt using the key used to encrypt the filereferencesecondary upon sharing
@@ -585,11 +597,11 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 	//Now we can open the filereferenceprimary from the filereferencesecondary
 	file_reference_primary_bytes_encrypted_HMAC, ok := userlib.DatastoreGet(file_reference_secondary.File_reference_primary_pointer)
 	if !ok {
-		return errors.New("Not able to retrieve the filereferenceprimary file from filereferencesecondary file")
+		return errors.New("not able to retrieve the filereferenceprimary file from filereferencesecondary file")
 	}
 	//Check the HMCA of the file_reference_primary
 	if !ValidHMAC(file_reference_secondary.Hmac_key, file_reference_primary_bytes_encrypted_HMAC) {
-		return errors.New("The integrity of the filereferenceprimary is compromised")
+		return errors.New("the integrity of the filereferenceprimary is compromised")
 	}
 	//Decrypt it
 	file_reference_primary_bytes_encrypted := file_reference_primary_bytes_encrypted_HMAC[:len(file_reference_primary_bytes_encrypted_HMAC)-64]
@@ -603,11 +615,11 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 	//We can now load the file controller
 	file_controller_bytes_encrypted_HMAC, ok := userlib.DatastoreGet(file_reference_primary.File_controller_pointer)
 	if !ok {
-		return errors.New("Could not retrieve file controller from filereferenceprimary")
+		return errors.New("could not retrieve file controller from filereferenceprimary")
 	}
 	//Check the HMAC
 	if !ValidHMAC(file_reference_primary.Hmac_key, file_controller_bytes_encrypted_HMAC) {
-		return errors.New("The integrity of the file controller has been compromised")
+		return errors.New("the integrity of the file controller has been compromised")
 	}
 	//Decrypt
 	file_controller_bytes_encrypted := file_controller_bytes_encrypted_HMAC[:len(file_controller_bytes_encrypted_HMAC)-64]
@@ -668,6 +680,12 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 //Might have to reupload file controller to datastore, not sure yet
 
 func (userdata *User) AppendToFile(filename string, content []byte) error {
+	//Update the user to get the master key and hmac key
+	userdata, err := getUserdata(userdata)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -728,6 +746,49 @@ func UploadUserdata(userdata *User) (err error) {
 	userlib.DatastoreSet(user_UUID, user_bytes_encrypted_MAC)
 
 	return nil
+}
+
+// Function to calculate hmac key and masterkey and to check the integrity of the user
+func getUserdata(userdata *User) (updated_userdata *User, err error) {
+	updated_userdata = userdata
+	//Creating the masterkey
+	master_key_salt := userdata.Username + "k"
+	master_key := userlib.Argon2Key([]byte(userdata.Password), []byte(master_key_salt), key_length)
+	userdata.master_key = master_key
+
+	//Create the hmac key
+	Hmac_key_64, err := userlib.HashKDF(master_key, []byte("Hmac key for user"))
+	if err != nil {
+		return nil, err
+	}
+	hmac_key := Hmac_key_64[:16]
+
+	//Find the user in the datastore
+	uuid, err := uuid.FromBytes(userlib.Hash([]byte(userdata.Username)[:16]))
+	if err != nil {
+		return nil, err
+	}
+	stored_user_w_hmac, ok := userlib.DatastoreGet(uuid)
+	if !ok {
+		return nil, errors.New("unable to find the user in datastore")
+	}
+	//Check the hmac
+	if !ValidHMAC(hmac_key, stored_user_w_hmac) {
+		return nil, errors.New("The integrity of the user has been compromised")
+	}
+	//If hmac is correct we can update the userdata and send this back
+	stored_user_bytes_encrypted := stored_user_w_hmac[:len(stored_user_w_hmac)-64]
+	stored_user_bytes_decrypted := userlib.SymDec(master_key, stored_user_bytes_encrypted)
+	//Unmarshal and place into the updates userdata
+	err = json.Unmarshal(stored_user_bytes_decrypted, &updated_userdata)
+	if err != nil {
+		return nil, err
+	}
+
+	updated_userdata.hmac_key = hmac_key
+	updated_userdata.master_key = master_key
+
+	return updated_userdata, nil
 }
 
 func ValidHMAC(hmac_key []byte, content_with_HMAC []byte) (valid bool) {

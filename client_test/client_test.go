@@ -104,6 +104,10 @@ var _ = Describe("Client Tests", func() {
 			err = alice.StoreFile(aliceFile, []byte(contentOne))
 			Expect(err).To(BeNil())
 
+			userlib.DebugMsg("Storing file data: %s", contentTwo)
+			err = alice.StoreFile(aliceFile, []byte(contentTwo))
+			Expect(err).To(BeNil())
+
 			userlib.DebugMsg("Appending file data: %s", contentTwo)
 			err = alice.AppendToFile(aliceFile, []byte(contentTwo))
 			Expect(err).To(BeNil())
