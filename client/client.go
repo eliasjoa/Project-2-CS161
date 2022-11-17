@@ -146,7 +146,6 @@ type FileReferenceSecondary struct {
 type Invitation struct {
 	FRPdk  []byte
 	FRPhmk []byte
-	FRPid  uuid.UUID
 }
 
 // You can add other attributes here if you want! But note that in order for attributes to
@@ -970,7 +969,7 @@ func (userdata *User) LoadFile(filename string) (content []byte, err error) {
 	for has_next {
 		var file File
 		current_file_bytes, err := RetrieveFromDatastore(next_uuid, file_reference_primary.File_enc_key, file_reference_primary.Hmac_key)
-		if err.Error() == "integrity of object has been compromised" {
+		if err != nil {
 			return nil, err
 		}
 		err = json.Unmarshal(current_file_bytes, &file)
@@ -1041,7 +1040,7 @@ func (userdata *User) CreateInvitation(filename string, recipientUsername string
 			return uuid.Nil, err
 		}
 		//Create a new filereferenceprimary
-		//This has all the same information as is in the filereferenceprimary
+		//This has all the same information as is in the filereferenceowner
 		new_file_reference_primary.File_controller_pointer = file_reference_owner.File_controller_pointer
 		new_file_reference_primary.File_enc_key = file_reference_owner.File_enc_key
 		new_file_reference_primary.Hmac_key = file_reference_owner.Hmac_key
@@ -1085,7 +1084,7 @@ func (userdata *User) CreateInvitation(filename string, recipientUsername string
 			return uuid.Nil, err
 		}
 		//Now we fetch the public key of the recipient
-		user_uuid := "Public key for:" + userdata.Username
+		user_uuid := "Public key for:" + recipientUsername
 		recipient_public_key, ok := userlib.KeystoreGet(user_uuid)
 		if !ok {
 			return uuid.Nil, errors.New("the recipient does not exist")
@@ -1175,6 +1174,7 @@ func (userdata *User) CreateInvitation(filename string, recipientUsername string
 }
 
 func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid.UUID, filename string) error {
+	var invitation Invitation
 	//Update userdata
 	userdata, err := getUserdata(userdata)
 	if err != nil {
@@ -1190,21 +1190,21 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 	if err != nil {
 		return err
 	}
-	datastore_file, ok := userlib.DatastoreGet(file_uuid)
+	_, ok := userlib.DatastoreGet(file_uuid)
 	if ok {
-		return errors.New("The user already has access to that file")
+		return errors.New("the user already has access to that file")
 	}
 	//Compute the authenticity of the invitation
 	//Find the public signature key of the sender
 	user_signature_key_keystore := "Signature key for:" + senderUsername
 	senders_public_sign_key, ok := userlib.KeystoreGet(user_signature_key_keystore)
 	if !ok {
-		return errors.New("There were no signature key for the sender")
+		return errors.New("there were no signature key for the sender")
 	}
 	//retrieve the invitation
 	invitation_bytes_encrypted_signed, ok := userlib.DatastoreGet(invitationPtr)
 	if !ok {
-		return errors.New("Could not find the invitation")
+		return errors.New("could not find the invitation")
 	}
 	invitation_signature := invitation_bytes_encrypted_signed[len(invitation_bytes_encrypted_signed)-256:]
 	//Check the signature
@@ -1213,7 +1213,65 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 	if err != nil {
 		return err
 	}
+	//Decrypt
+	invitation_bytes, err := userlib.PKEDec(userdata.Secret_key, invitation_bytes_encrypted)
+	if err != nil {
+		return err
+	}
+	//Unmarshal
+	err = json.Unmarshal(invitation_bytes, &invitation)
+	if err != nil {
+		return err
+	}
+	//If the sharer is not someone that owns the file the file might have been revoked
+	//Therefore, we check if the filereferenceprimary still exists
+	//The uuid is the uuid for the new filereferenceprimary created in the accept invitation
+	file_reference_owner_uuid, err := uuid.FromBytes(userlib.Hash(invitation.FRPdk)[:16])
+	if err != nil {
+		return err
+	}
+	_, ok = userlib.DatastoreGet(file_reference_owner_uuid)
+	if !ok {
+		return errors.New("the sender's access to the file have been revoked")
+	}
 
+	//Now we can create the new filereferencesecondary for the receiver
+	var file_reference_secondary FileReferenceSecondary
+	file_reference_secondary.File_Reference_Primary_enc_key = invitation.FRPdk
+	file_reference_secondary.Hmac_key = invitation.FRPhmk
+	file_reference_secondary.File_reference_primary_pointer, err = uuid.FromBytes(userlib.Hash(invitation.FRPdk)[:16])
+	if err != nil {
+		return err
+	}
+	//We now have everything that we need to get access to the file and can store our filereferenceprimary
+	//Create the encryption key
+	encryption_key_64, err := userlib.HashKDF(userdata.master_key, []byte("Encryption key for file"+filename))
+	if err != nil {
+		return err
+	}
+	encryption_key := encryption_key_64[:16]
+	//Create the HMAC key
+	hmac_key_64, err := userlib.HashKDF(userdata.master_key, []byte("HMAC key for file"+filename))
+	if err != nil {
+		return err
+	}
+	hmac_key := hmac_key_64[:16]
+	//Marshal it
+	file_reference_secondary_bytes, err := json.Marshal(file_reference_secondary)
+	if err != nil {
+		return err
+	}
+	//Encrypt it
+	iv := userlib.RandomBytes(16)
+	file_reference_secondary_bytes_encrypted := userlib.SymEnc(encryption_key, iv, file_reference_secondary_bytes)
+	//Hmac it
+	file_reference_secondary_hmac, err := userlib.HMACEval(hmac_key, file_reference_secondary_bytes_encrypted)
+	if err != nil {
+		return err
+	}
+	file_reference_secondary_bytes_encrypted_hmac := append(file_reference_secondary_bytes_encrypted, file_reference_secondary_hmac...)
+	//Store it
+	userlib.DatastoreSet(file_uuid, file_reference_secondary_bytes_encrypted_hmac)
 	return nil
 }
 
