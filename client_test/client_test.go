@@ -32,6 +32,7 @@ func TestSetupAndExecution(t *testing.T) {
 // Global Variables (feel free to add more!)
 // ================================================
 const defaultPassword = "password"
+const defaultPassword2 = "password2"
 const emptyString = ""
 const contentOne = "Bitcoin is Nick's favorite "
 const contentTwo = "digital "
@@ -246,6 +247,159 @@ var _ = Describe("Client Tests", func() {
 
 			err = charles.AppendToFile(charlesFile, []byte(contentTwo))
 			Expect(err).ToNot(BeNil())
+		})
+		Specify("3.1.a: The client should assume that each user has a unique username.", func() {
+			userlib.DebugMsg("Initializing users Alice and Alice 2 with the same username")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			bob, err = client.InitUser("alice", defaultPassword2)
+			Expect(err).NotTo(BeNil())
+		})
+
+		Specify("3.1.2.a: The client MUST NOT assume each user has a unique password. Like the real world, users may happen to choose the same password ", func() {
+			userlib.DebugMsg("Initializing users Alice")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Initializing user bob")
+			bob, err = client.InitUser("bob", defaultPassword)
+			Expect(err).To(BeNil())
+		})
+
+		Specify("3.1.2.c: The client SHOULD support passwords length greater than or equal to zero.", func() {
+			userlib.DebugMsg("Initializing users Alice, Bob, and Charlie.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			bob, err = client.InitUser("bob", emptyString)
+			Expect(err).To(BeNil())
+
+			charles, err = client.InitUser("charles", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Alice storing file %s with content: %s", emptyString, contentOne)
+			alice.StoreFile(defaultPassword, []byte(contentOne))
+
+			userlib.DebugMsg("Alice creating invite for Bob for file %s, and Bob accepting invite under name %s.", aliceFile, bobFile)
+
+			invite, err := alice.CreateInvitation(defaultPassword, "bob")
+			Expect(err).To(BeNil())
+
+			err = bob.AcceptInvitation("alice", invite, bobFile)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Bob creating invite for Charles for file %s, and Charlie accepting invite under name %s.", bobFile, charlesFile)
+			invite, err = bob.CreateInvitation(bobFile, "charles")
+			Expect(err).To(BeNil())
+
+			err = charles.AcceptInvitation("bob", invite, charlesFile)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Alice revoking Bob's access from %s.", aliceFile)
+			err = alice.RevokeAccess(defaultPassword, "bob")
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Checking that Alice can still load the file.")
+			data, err := alice.LoadFile(defaultPassword)
+			Expect(err).To(BeNil())
+			Expect(data).To(Equal([]byte(contentOne)))
+
+			userlib.DebugMsg("Checking that Bob/Charles lost access to the file.")
+			_, err = bob.LoadFile(bobFile)
+			Expect(err).ToNot(BeNil())
+
+			_, err = charles.LoadFile(charlesFile)
+			Expect(err).ToNot(BeNil())
+
+			userlib.DebugMsg("Checking that the revoked users cannot append to the file.")
+			err = bob.AppendToFile(bobFile, []byte(contentTwo))
+			Expect(err).ToNot(BeNil())
+
+			err = charles.AppendToFile(charlesFile, []byte(contentTwo))
+			Expect(err).ToNot(BeNil())
+
+		})
+		Specify("3.3.1: Each public key SHOULD be used for a single purpose, which means that each user is likely to have more than one public key.", func() {
+			//Do lots of stuff and check if there are more than one public key
+			userlib.DebugMsg("Initializing users Alice, Bob, and Charlie.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			bob, err = client.InitUser("bob", defaultPassword)
+			Expect(err).To(BeNil())
+
+			charles, err = client.InitUser("charles", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Alice storing file %s with content: %s", aliceFile, contentOne)
+			alice.StoreFile(aliceFile, []byte(contentOne))
+
+			userlib.DebugMsg("Alice creating invite for Bob for file %s, and Bob accepting invite under name %s.", aliceFile, bobFile)
+
+			invite, err := alice.CreateInvitation(aliceFile, "bob")
+			Expect(err).To(BeNil())
+
+			err = bob.AcceptInvitation("alice", invite, bobFile)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Checking that Alice can still load the file.")
+			data, err := alice.LoadFile(aliceFile)
+			Expect(err).To(BeNil())
+			Expect(data).To(Equal([]byte(contentOne)))
+
+			userlib.DebugMsg("Checking that Bob can load the file.")
+			data, err = bob.LoadFile(bobFile)
+			Expect(err).To(BeNil())
+			Expect(data).To(Equal([]byte(contentOne)))
+
+			userlib.DebugMsg("Bob creating invite for Charles for file %s, and Charlie accepting invite under name %s.", bobFile, charlesFile)
+			invite, err = bob.CreateInvitation(bobFile, "charles")
+			Expect(err).To(BeNil())
+
+			err = charles.AcceptInvitation("bob", invite, charlesFile)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Checking that Charles can load the file.")
+			data, err = charles.LoadFile(charlesFile)
+			Expect(err).To(BeNil())
+			Expect(data).To(Equal([]byte(contentOne)))
+
+			userlib.DebugMsg("Alice revoking Bob's access from %s.", aliceFile)
+			err = alice.RevokeAccess(aliceFile, "bob")
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Checking that Alice can still load the file.")
+			data, err = alice.LoadFile(aliceFile)
+			Expect(err).To(BeNil())
+			Expect(data).To(Equal([]byte(contentOne)))
+
+			userlib.DebugMsg("Checking that Bob/Charles lost access to the file.")
+			_, err = bob.LoadFile(bobFile)
+			Expect(err).ToNot(BeNil())
+
+			_, err = charles.LoadFile(charlesFile)
+			Expect(err).ToNot(BeNil())
+
+			userlib.DebugMsg("Checking that the revoked users cannot append to the file.")
+			err = bob.AppendToFile(bobFile, []byte(contentTwo))
+			Expect(err).ToNot(BeNil())
+
+			err = charles.AppendToFile(charlesFile, []byte(contentTwo))
+			Expect(err).ToNot(BeNil())
+			userlib.DebugMsg("Count the number of keys and expect it to be more than 1")
+			count := 0
+			user_public_key_keystore := "Public key for:" + alice.Username
+			_, ok := userlib.KeystoreGet(user_public_key_keystore)
+			if ok {
+				count += 1
+			}
+			user_signature_key_keystore := "Signature key for:" + alice.Username
+			_, ok = userlib.KeystoreGet(user_signature_key_keystore)
+			if ok {
+				count += 1
+			}
+			Expect(count).Should(BeNumerically(">", 1))
 		})
 
 	})
