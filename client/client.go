@@ -109,7 +109,7 @@ type User struct {
 	Signature_private_key userlib.DSSignKey
 	master_key            []byte
 	hmac_key              []byte
-	Files_owned           map[string]bool
+	Files_owned           map[uuid.UUID]bool
 }
 
 type File struct {
@@ -228,7 +228,7 @@ func InitUser(Username string, password string) (userdataptr *User, err error) {
 		return nil, errors.New("could not create a new value for an instance in the datastore for the user")
 	}
 	//Make a file owned and add to userdata
-	userdata.Files_owned = make(map[string]bool)
+	userdata.Files_owned = make(map[uuid.UUID]bool)
 	//Turn the data into JSON
 	user_bytes, err := json.Marshal(userdata)
 	if err != nil {
@@ -364,9 +364,13 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 	//If the file does not exist
 	if !ok {
 		//Update the userdata with the new file owned
-		userdata.Files_owned[filename] = true
+		uuid_check, err := uuid.FromBytes(userlib.Hash([]byte(filename))[:16])
+		if err != nil {
+			return err
+		}
+		userdata.Files_owned[uuid_check] = true
 		//Upload the new userdata to the datastore using helper function
-		err := UploadUserdata(userdata)
+		err = UploadUserdata(userdata)
 		if err != nil {
 			return err
 		}
@@ -479,7 +483,11 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 	}
 	//For when the file already exists
 	//If the user owns the file
-	owns_file := userdata.Files_owned[filename]
+	uuid_check, err := uuid.FromBytes(userlib.Hash([]byte(filename))[:16])
+	if err != nil {
+		return err
+	}
+	owns_file := userdata.Files_owned[uuid_check]
 	if owns_file {
 		var file_reference_owner FileReferenceOwner
 		var file_controller FileController
@@ -711,8 +719,12 @@ func (userdata *User) AppendToFile(filename string, content []byte) error {
 	hmac_key := hmac_key_64[:16]
 
 	//Append if owner
-	owned := userdata.Files_owned[filename]
-	if owned {
+	uuid_check, err := uuid.FromBytes(userlib.Hash([]byte(filename))[:16])
+	if err != nil {
+		return err
+	}
+	owns_file := userdata.Files_owned[uuid_check]
+	if owns_file {
 		//Since it is owned the user can get the file controller from an filereferenceowner struct
 		var file_reference_owner FileReferenceOwner
 		//Check HMAC
@@ -870,8 +882,12 @@ func (userdata *User) LoadFile(filename string) (content []byte, err error) {
 	hmac_key := hmac_key_64[:16]
 
 	//If the user is the owner of the file
-	owner := userdata.Files_owned[filename]
-	if owner {
+	uuid_check, err := uuid.FromBytes(userlib.Hash([]byte(filename))[:16])
+	if err != nil {
+		return nil, err
+	}
+	owns_file := userdata.Files_owned[uuid_check]
+	if owns_file {
 		//Retrieve the filereferenceowner
 		var file_reference_owner FileReferenceOwner
 		var file_controller FileController
@@ -1020,9 +1036,13 @@ func (userdata *User) CreateInvitation(filename string, recipientUsername string
 
 	//we now retrieve the content of the filereferenceowner or filereferencesecondary
 	//If the user owns the file
-	owner := userdata.Files_owned[filename]
+	uuid_check, err := uuid.FromBytes(userlib.Hash([]byte(filename))[:16])
+	if err != nil {
+		return uuid.Nil, err
+	}
+	owns_file := userdata.Files_owned[uuid_check]
 	var invitation Invitation
-	if owner {
+	if owns_file {
 		//Retrieve the filereferenceowner
 		var file_reference_owner FileReferenceOwner
 		var new_file_reference_primary FileReferencePrimary
@@ -1105,7 +1125,7 @@ func (userdata *User) CreateInvitation(filename string, recipientUsername string
 	}
 
 	//If the sharer is not the owner
-	if !owner {
+	if !owns_file {
 		//We now instead find the filereferencesecondary at the file uuid
 		//This is used to access the filereferenceprimary
 		var file_reference_secondary FileReferenceSecondary
@@ -1279,8 +1299,12 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 		return err
 	}
 	//Check if the user owns the file
-	_, owns := userdata.Files_owned[filename]
-	if !owns {
+	uuid_check, err := uuid.FromBytes(userlib.Hash([]byte(filename))[:16])
+	if err != nil {
+		return err
+	}
+	_, owns_file := userdata.Files_owned[uuid_check]
+	if !owns_file {
 		return errors.New("you cannot revoke access as you are not the owner of this file")
 	}
 	//Before anything else, download all the old content while it is possible
