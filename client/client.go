@@ -343,7 +343,6 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 	file_uuid_bytes = append(file_uuid_bytes, userlib.Hash([]byte(filename))...)
 	file_uuid, err := uuid.FromBytes(userlib.Hash(file_uuid_bytes)[:16])
 	if err != nil {
-		fmt.Print("1")
 		return err
 	}
 	//Check if file exists
@@ -352,14 +351,12 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 	//Create the encryption key
 	encryption_key_64, err := userlib.HashKDF(userdata.master_key, []byte("Encryption key for file"+filename))
 	if err != nil {
-		fmt.Print("2")
 		return err
 	}
 	encryption_key := encryption_key_64[:16]
 	//Create the HMAC key
 	hmac_key_64, err := userlib.HashKDF(userdata.master_key, []byte("HMAC key for file"+filename))
 	if err != nil {
-		fmt.Print("3")
 		return err
 	}
 	hmac_key := hmac_key_64[:16]
@@ -1089,8 +1086,6 @@ func (userdata *User) CreateInvitation(filename string, recipientUsername string
 		if !ok {
 			return uuid.Nil, errors.New("the recipient does not exist")
 		}
-		fmt.Println(recipient_public_key.PubKey.N.BitLen())
-		fmt.Println(len(invitation_bytes))
 		//Encrypt it
 		invitation_bytes_encrypted, err := userlib.PKEEnc(recipient_public_key, invitation_bytes)
 		if err != nil {
