@@ -527,6 +527,84 @@ var _ = Describe("Client Tests", func() {
 			_, err := alice.LoadFile(aliceFile)
 			Expect(err).NotTo(BeNil())
 		})
+		Specify("Test if i can accept a duplicate invitation to a file if only shared by one person", func() {
+			userlib.DebugMsg("Initializing users Alice, Bob, and Charlie.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
 
+			bob, err = client.InitUser("bob", defaultPassword)
+			Expect(err).To(BeNil())
+
+			charles, err = client.InitUser("charles", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Alice storing file %s with content: %s", aliceFile, contentOne)
+			alice.StoreFile(aliceFile, []byte(contentOne))
+			_, err = bob.LoadFile(aliceFile)
+			Expect(err).ToNot(BeNil())
+
+			userlib.DebugMsg("Alice creating invite for Bob for file %s, and Bob accepting invite under name %s.", aliceFile, bobFile)
+
+			invite, err := alice.CreateInvitation(aliceFile, "bob")
+			Expect(err).To(BeNil())
+
+			invite2, err := alice.CreateInvitation(aliceFile, "bob")
+			Expect(err).To(BeNil())
+
+			err = bob.AcceptInvitation("alice", invite, bobFile)
+			Expect(err).To(BeNil())
+
+			_, err = bob.LoadFile(bobFile)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Alice revoking Bob's access from %s.", aliceFile)
+			err = alice.RevokeAccess(aliceFile, "bob")
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Checking that Bob/Charles lost access to the file.")
+			_, err = bob.LoadFile(bobFile)
+			Expect(err).ToNot(BeNil())
+
+			userlib.DebugMsg("Bob accepting duplicate invite, should not be able to accept again")
+			err = bob.AcceptInvitation("alice", invite2, "bobFile2")
+			Expect(err).NotTo(BeNil())
+		})
+		Specify("Testing if a user can accept an invitation from a user whose access has revoked", func() {
+			userlib.DebugMsg("Initializing users Alice, Bob, and Charlie.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			bob, err = client.InitUser("bob", defaultPassword)
+			Expect(err).To(BeNil())
+
+			charles, err = client.InitUser("charles", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Alice storing file %s with content: %s", aliceFile, contentOne)
+			alice.StoreFile(aliceFile, []byte(contentOne))
+			_, err = bob.LoadFile(aliceFile)
+			Expect(err).ToNot(BeNil())
+
+			userlib.DebugMsg("Alice creating invite for Bob for file %s, and Bob accepting invite under name %s.", aliceFile, bobFile)
+
+			invite, err := alice.CreateInvitation(aliceFile, "bob")
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Bob accepting invite")
+			err = bob.AcceptInvitation("alice", invite, bobFile)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("bok shares the file with charles")
+			charlesInvite, err := bob.CreateInvitation(bobFile, "charles")
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Alice revokes access to bob")
+			err = alice.RevokeAccess(aliceFile, "bob")
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Now accept the file as charles")
+			err = charles.AcceptInvitation("bob", charlesInvite, "charlesFile")
+			Expect(err).NotTo(BeNil())
+		})
 	})
 })

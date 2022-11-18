@@ -1176,6 +1176,7 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 		return err
 	}
 	//Check if the user already has access to the file
+	//This will also return an error if the user has been revoked
 	//Compute the uuid of the file
 	var file_uuid_bytes []byte
 	file_uuid_bytes = append(file_uuid_bytes, userlib.Hash([]byte(userdata.Username))...)
@@ -1219,6 +1220,7 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 		return err
 	}
 	//If the sharer is not someone that owns the file the file might have been revoked
+	//This also checks if someone that the file has been shared with twice but then revoked can accept it or not
 	//Therefore, we check if the filereferenceprimary still exists
 	//The uuid is the uuid for the new filereferenceprimary created in the accept invitation
 	file_reference_owner_uuid, err := uuid.FromBytes(userlib.Hash(invitation.FRPdk)[:16])
@@ -1227,7 +1229,7 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 	}
 	_, ok = userlib.DatastoreGet(file_reference_owner_uuid)
 	if !ok {
-		return errors.New("the sender's access to the file have been revoked")
+		return errors.New("the sender's access has been revoked or your access has been revoked")
 	}
 
 	//Now we can create the new filereferencesecondary for the receiver
