@@ -1148,7 +1148,7 @@ func (userdata *User) CreateInvitation(filename string, recipientUsername string
 			return uuid.Nil, err
 		}
 		//Now we fetch the public key of the recipient
-		user_uuid := "Public key for:" + userdata.Username
+		user_uuid := "Public key for:" + recipientUsername
 		recipient_public_key, ok := userlib.KeystoreGet(user_uuid)
 		if !ok {
 			return uuid.Nil, errors.New("the recipient does not exist")
@@ -1276,6 +1276,161 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 }
 
 func (userdata *User) RevokeAccess(filename string, recipientUsername string) error {
+	//Update the userdata
+	userdata, err := getUserdata(userdata)
+	if err != nil {
+		return err
+	}
+	//Check if the user owns the file
+	_, ok := userdata.Files_owned[filename]
+	if !ok {
+		return errors.New("you cannot revoke access as you are not the owner of this file")
+	}
+	//Before anything else, download all the old content while it is possible
+	content, err := userdata.LoadFile(filename)
+	//Compute the uuid
+	var file_uuid_bytes []byte
+	file_uuid_bytes = append(file_uuid_bytes, userlib.Hash([]byte(userdata.Username))...)
+	file_uuid_bytes = append(file_uuid_bytes, userdata.Password...)
+	file_uuid_bytes = append(file_uuid_bytes, userlib.Hash([]byte(filename))...)
+	file_uuid, err := uuid.FromBytes(userlib.Hash(file_uuid_bytes)[:16])
+	if err != nil {
+		return err
+	}
+	var file_reference_owner FileReferenceOwner
+	//Compute hmac key and encryption key of the filereferenceowner
+	//Create the encryption key
+	encryption_key_64, err := userlib.HashKDF(userdata.master_key, []byte("Encryption key for file"+filename))
+	if err != nil {
+		return err
+	}
+	encryption_key := encryption_key_64[:16]
+	//Create the HMAC key
+	hmac_key_64, err := userlib.HashKDF(userdata.master_key, []byte("HMAC key for file"+filename))
+	if err != nil {
+		return err
+	}
+	hmac_key := hmac_key_64[:16]
+	//Open filerefernceowner
+	file_reference_owner_bytes, err := RetrieveFromDatastore(file_uuid, encryption_key, hmac_key)
+	if err != nil {
+		return err
+	}
+	//Unmarshal it
+	err = json.Unmarshal(file_reference_owner_bytes, &file_reference_owner)
+	if err != nil {
+		return err
+	}
+	//We now have access to the filereferenceowner struct for the file
+	//Check if the user shared the file directly with the person
+	_, ok = file_reference_owner.Uuid_shared_with[recipientUsername]
+	if !ok {
+		return errors.New("the file is not directly shared with that user or not shared at all")
+	}
+	//Now we delete the filereferenceprimary associated with this user
+	old_file_reference_primary_uuid := file_reference_owner.Uuid_shared_with[recipientUsername]
+	userlib.DatastoreDelete(old_file_reference_primary_uuid)
+	//Delete all the information for the user in the shared with attributes
+	delete(file_reference_owner.Enc_keys_shared_with, recipientUsername)
+	delete(file_reference_owner.Hmac_keys_shared_with, recipientUsername)
+	delete(file_reference_owner.Uuid_shared_with, recipientUsername)
+	//Relocate and encrypt the file with new hmac and encryption keys
+
+	new_file_controller_uuid := uuid.New()
+	new_file_reference_primary_hmac_key := userlib.RandomBytes(16)
+	new_file_reference_primary_encryption_key := userlib.RandomBytes(16)
+
+	//We now update all the other people that should still have access to it with the new FRP
+	for i, element := range file_reference_owner.Uuid_shared_with {
+		var new_file_reference_primary FileReferencePrimary
+		//Retrieve old filereferenceprimary
+		old_file_reference_primary_bytes, err := RetrieveFromDatastore(file_reference_owner.Uuid_shared_with[i], file_reference_owner.Enc_keys_shared_with[i], file_reference_owner.Hmac_keys_shared_with[i])
+		if err != nil {
+			return err
+		}
+		err = json.Unmarshal(old_file_reference_primary_bytes, &new_file_reference_primary)
+		if err != nil {
+			return err
+		}
+		new_file_reference_primary.File_enc_key = new_file_reference_primary_encryption_key
+		new_file_reference_primary.Hmac_key = new_file_reference_primary_hmac_key
+		new_file_reference_primary.File_controller_pointer = new_file_controller_uuid
+		err = SendToDatastore(file_reference_owner.Uuid_shared_with[i], file_reference_owner.Enc_keys_shared_with[i], file_reference_owner.Hmac_keys_shared_with[i], new_file_reference_primary)
+		if err != nil {
+			return err
+		}
+		_ = element
+	}
+
+	//Now we need to create a new file controller at the new uuid we previously created
+	var new_file_controller FileController
+	//Get the old filecontroller
+	old_file_controller, err := RetrieveFromDatastore(file_reference_owner.File_controller_pointer, file_reference_owner.File_enc_key, file_reference_owner.Hmac_key)
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(old_file_controller, &new_file_controller)
+	if err != nil {
+		return err
+	}
+	//Store the start of the old files to update new files and delete old ones
+	old_start_uuid := new_file_controller.Start
+	//Create new start and end
+	new_file_controller.Start = uuid.New()
+	new_file_controller.End = uuid.New()
+	//Store it
+	err = SendToDatastore(new_file_controller_uuid, new_file_reference_primary_encryption_key, new_file_reference_primary_hmac_key, new_file_controller)
+	if err != nil {
+		return err
+	}
+
+	//Create the new files using the old content
+	if err != nil {
+		return err
+	}
+	var start_file File
+	var end_file File
+	start_file.Content = content
+	start_file.Next_uuid = new_file_controller.End
+
+	//Store the new file
+	err = SendToDatastore(new_file_controller.Start, new_file_reference_primary_encryption_key, new_file_reference_primary_hmac_key, start_file)
+	err = SendToDatastore(new_file_controller.End, new_file_reference_primary_encryption_key, new_file_reference_primary_hmac_key, end_file)
+
+	//Now we use the old_start_uuid to delete all the old files
+	var has_next bool
+	has_next = true
+	next_uuid := old_start_uuid
+	for has_next {
+		var file File
+		current_file_bytes, err := RetrieveFromDatastore(next_uuid, file_reference_owner.File_enc_key, file_reference_owner.Hmac_key)
+		if err != nil {
+			return err
+		}
+		err = json.Unmarshal(current_file_bytes, &file)
+		if err != nil {
+			return err
+		}
+		userlib.DatastoreDelete(next_uuid)
+		//Check if that was the end of the list
+		if file.Next_uuid == uuid.Nil {
+			has_next = false
+			break
+		}
+		next_uuid = file.Next_uuid
+	}
+	//We finally also need to delete filecontroller
+	userlib.DatastoreDelete(file_reference_owner.File_controller_pointer)
+	//Update with the new one
+	file_reference_owner.File_controller_pointer = new_file_controller_uuid
+	file_reference_owner.File_enc_key = new_file_reference_primary_encryption_key
+	file_reference_owner.Hmac_key = new_file_reference_primary_hmac_key
+
+	//Store it
+	err = SendToDatastore(file_uuid, encryption_key, hmac_key, file_reference_owner)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
