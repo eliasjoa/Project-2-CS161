@@ -678,7 +678,7 @@ func (userdata *User) AppendToFile(filename string, content []byte) error {
 	//Update the user to get the master key and hmac key
 	userdata, err := getUserdata(userdata)
 	if err != nil {
-		return errors.New("687")
+		return err
 	}
 	//Get the uuid of the file
 	var file_uuid_bytes []byte
