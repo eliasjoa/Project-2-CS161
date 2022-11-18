@@ -1288,6 +1288,9 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 	}
 	//Before anything else, download all the old content while it is possible
 	content, err := userdata.LoadFile(filename)
+	if err != nil {
+		return err
+	}
 	//Compute the uuid
 	var file_uuid_bytes []byte
 	file_uuid_bytes = append(file_uuid_bytes, userlib.Hash([]byte(userdata.Username))...)
@@ -1395,7 +1398,13 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 
 	//Store the new file
 	err = SendToDatastore(new_file_controller.Start, new_file_reference_primary_encryption_key, new_file_reference_primary_hmac_key, start_file)
+	if err != nil {
+		return err
+	}
 	err = SendToDatastore(new_file_controller.End, new_file_reference_primary_encryption_key, new_file_reference_primary_hmac_key, end_file)
+	if err != nil {
+		return err
+	}
 
 	//Now we use the old_start_uuid to delete all the old files
 	var has_next bool
