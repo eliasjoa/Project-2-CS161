@@ -621,8 +621,8 @@ var _ = Describe("Client Tests", func() {
 			_, err := alice.CreateInvitation(aliceFile, "bob")
 			Expect(err).ToNot(BeNil())
 		})
-		Specify("Testing: Leafs doing some shit", func() {
-			userlib.DebugMsg("Initializing users Alice, Bob and charles.")
+		Specify("Can you accept someone else's invites", func() {
+			userlib.DebugMsg("Initializing users Alice, Bob, and Charlie.")
 			alice, err = client.InitUser("alice", defaultPassword)
 			Expect(err).To(BeNil())
 
@@ -634,59 +634,20 @@ var _ = Describe("Client Tests", func() {
 
 			userlib.DebugMsg("Alice storing file %s with content: %s", aliceFile, contentOne)
 			alice.StoreFile(aliceFile, []byte(contentOne))
-			Expect(err).To(BeNil())
+			_, err = bob.LoadFile(aliceFile)
+			Expect(err).ToNot(BeNil())
 
-			userlib.DebugMsg("alice creating invite for Bob.")
+			userlib.DebugMsg("Alice creating invite for Bob for file %s", aliceFile, bobFile)
 
 			invite, err := alice.CreateInvitation(aliceFile, "bob")
 			Expect(err).To(BeNil())
 
-			err = bob.AcceptInvitation("alice", invite, bobFile)
-			Expect(err).To(BeNil())
+			userlib.DebugMsg("Charles accepting invite on behalf of bob")
 
-			userlib.DebugMsg("Bob creating invite for Charles for file %s, and Charlie accepting invite under name %s.", bobFile, charlesFile)
-			invite, err = bob.CreateInvitation(bobFile, "charles")
-			Expect(err).To(BeNil())
-
-			err = charles.AcceptInvitation("bob", invite, charlesFile)
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Checking that Charles can load the file.")
-			data, err := charles.LoadFile(charlesFile)
-			Expect(err).To(BeNil())
-			Expect(data).To(Equal([]byte(contentOne)))
-
-			userlib.DebugMsg("checking that charles can append to the file")
-			err = charles.AppendToFile(charlesFile, []byte(contentOne))
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Cheking that alice gets updated file")
-			data, err = alice.LoadFile(aliceFile)
-			Expect(err).To(BeNil())
-			Expect(data).To(Equal([]byte(contentOne + contentOne)))
-
-			userlib.DebugMsg("Checking that charles can overwrite the file")
-			err = charles.StoreFile(charlesFile, []byte(contentTwo))
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Cheking that alice gets updated file")
-			data, err = alice.LoadFile(aliceFile)
-			Expect(err).To(BeNil())
-			Expect(data).To(Equal([]byte(contentTwo)))
-
-			userlib.DebugMsg("Check that bob has newest update")
-			data, err = bob.LoadFile(bobFile)
-			Expect(err).To(BeNil())
-			Expect(data).To(Equal([]byte(contentTwo)))
-
-			userlib.DebugMsg("Alice overwrites the file")
-			err = alice.StoreFile(aliceFile, []byte(contentThree))
-			Expect(err).To(BeNil())
-
-			userlib.DebugMsg("Check that bob has newest update")
-			data, err = bob.LoadFile(bobFile)
-			Expect(err).To(BeNil())
-			Expect(data).To(Equal([]byte(contentThree)))
+			userlib.DebugMsg("Bob accepting invite")
+			err = charles.AcceptInvitation("alice", invite, charlesFile)
+			Expect(err).NotTo(BeNil())
 		})
+
 	})
 })
