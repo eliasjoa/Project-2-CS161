@@ -331,7 +331,7 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 	//Use helper function for this
 	userdata, err = getUserdata(userdata)
 	if err != nil {
-		return errors.New("336")
+		return err
 	}
 	//First check if the file exists
 
@@ -1279,8 +1279,8 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 		return err
 	}
 	//Check if the user owns the file
-	_, ok := userdata.Files_owned[filename]
-	if !ok {
+	_, owns := userdata.Files_owned[filename]
+	if !owns {
 		return errors.New("you cannot revoke access as you are not the owner of this file")
 	}
 	//Before anything else, download all the old content while it is possible
@@ -1323,7 +1323,7 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 	}
 	//We now have access to the filereferenceowner struct for the file
 	//Check if the user shared the file directly with the person
-	_, ok = file_reference_owner.Uuid_shared_with[recipientUsername]
+	_, ok := file_reference_owner.Uuid_shared_with[recipientUsername]
 	if !ok {
 		return errors.New("the file is not directly shared with that user or not shared at all")
 	}
