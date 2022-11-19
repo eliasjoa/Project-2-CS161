@@ -898,7 +898,7 @@ var _ = Describe("Client Tests", func() {
 			err = alice.RevokeAccess(aliceFile, "bob")
 			Expect(err).To(BeNil())
 		})
-		Specify("Check that bob accept invite to a file he already has access to", func() {
+		Specify("Check that bob can't accept invite to a file he already has access to", func() {
 			userlib.DebugMsg("Initializing users Alice, Bob, and Charlie.")
 			alice, err = client.InitUser("alice", defaultPassword)
 			Expect(err).To(BeNil())
@@ -1022,7 +1022,49 @@ var _ = Describe("Client Tests", func() {
 			data, err = alicePhone.LoadFile(aliceFile)
 			Expect(err).To(BeNil())
 			Expect(data).To(Equal([]byte(contentOne + contentTwo + contentThree)))
+		})
+		Specify("Test username shorter than 1", func() {
+			userlib.DebugMsg("Create a user with less than 1 length")
+			_, err := client.InitUser(emptyString, defaultPassword)
+			Expect(err).ToNot(BeNil())
+		})
+		Specify("test if you can accept an invitation to a file you already have access to but under a new name", func() {
+			userlib.DebugMsg("Initializing users Alice, Bob, and Charlie.")
+			alice, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
 
+			bob, err = client.InitUser("bob", defaultPassword)
+			Expect(err).To(BeNil())
+
+			charles, err = client.InitUser("charles", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Alice storing file %s with content: %s", aliceFile, contentOne)
+			err = alice.StoreFile(aliceFile, []byte(contentOne))
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Alice creating invite for Bob for file %s, and Bob accepting invite under name %s.", aliceFile, bobFile)
+			invite, err := alice.CreateInvitation(aliceFile, "bob")
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Alice creating invite for Bob for file %s, and Bob accepting invite under name %s.", aliceFile, bobFile)
+			invite2, err := alice.CreateInvitation(aliceFile, "bob")
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Bob accepting invite")
+			err = bob.AcceptInvitation("alice", invite, bobFile)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Bob accepting invite")
+			err = bob.AcceptInvitation("alice", invite2, "bobFile2")
+			Expect(err).NotTo(BeNil())
+
+			userlib.DebugMsg("Bob shares with Charles")
+			invite1, err := bob.CreateInvitation(bobFile, "charles")
+			Expect(err).To(BeNil())
+
+			err = charles.AcceptInvitation("bob", invite1, charlesFile)
+			Expect(err).To(BeNil())
 		})
 	})
 })
