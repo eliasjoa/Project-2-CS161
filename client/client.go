@@ -100,8 +100,6 @@ func someUsefulThings() {
 // (e.g. like the Username attribute) and methods (e.g. like the StoreFile method below).
 const key_length = 16
 
-var counter int
-
 type User struct {
 	Username              string
 	Password              []byte //Stored as hash
@@ -1073,6 +1071,11 @@ func (userdata *User) CreateInvitation(filename string, recipientUsername string
 		new_file_reference_primary_uuid, err := uuid.FromBytes(userlib.Hash(file_reference_primary_encryption_key)[:16])
 		if err != nil {
 			return uuid.Nil, err
+		}
+		//Check if the person already has access
+		_, ok := file_reference_owner.Uuid_shared_with[recipientUsername]
+		if ok {
+			return uuid.Nil, errors.New("this user already has access")
 		}
 		//Now we store all this information in the filereferenceowner shared with
 		file_reference_owner.Uuid_shared_with[recipientUsername] = new_file_reference_primary_uuid
